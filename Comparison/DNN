@@ -1,0 +1,293 @@
+import pandas as pd
+import numpy as np
+import random
+import sklearn
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import  Dense,TimeDistributed,Input
+from sklearn.metrics import confusion_matrix, precision_recall_curve
+from sklearn.metrics import recall_score, classification_report, auc, roc_curve
+from sklearn.metrics import precision_recall_fscore_support, f1_score
+from tensorflow.keras import  Sequential
+from tensorflow.keras.layers import LSTM, Dropout,RepeatVector,SimpleRNN
+import operator
+
+import time 
+
+
+#print(k)
+reliability = pd.read_csv(r"E:\jupyter\lstm\incremental.csv",header=0,usecols=[0,k],nrows=1001)#,names=['time','reliability']
+reliability.columns=['time','reliability']
+
+np.random.seed(1)
+tf.random.set_seed(1)
+#定义阈值
+#threshold = (np.max(train_mae_loss)*0.45)
+#threshold =0.015
+threshold_percent=0.9
+alpha=0.5
+TIME_STEPS = 20
+train_size=int(len(reliability)*0.5)
+test_size=len(reliability)-train_size
+vaild_size=int(train_size*0.4)
+sample_size=train_size-vaild_size
+dataset_size=train_size
+
+#划分训练集和测试集
+
+train,test=reliability.iloc[0:train_size],reliability.iloc[train_size:len(reliability)]
+print(train.shape,test.shape)
+sample_reliability=train['reliability'] 
+###############################################################################
+#定义权重
+def setWeight(alpha,dataset,dataset_size):
+    #alpha权重的参数,dataset需要设置权重的数据集(训练集)
+    tup_list=[]
+    for i in range(0,dataset_size):
+        data=dataset[i]
+        tup1=(data,alpha**i)    
+        tup_list.append(tup1)
+    return tup_list
+
+def setEqualWeight(dataset,dataset_size):
+    #alpha权重的参数,dataset需要设置权重的数据集(训练集)
+    tup_list=[]
+    for i in range(0,dataset_size):
+        data=dataset[i]
+        tup1=(data,1)    
+        tup_list.append(tup1)
+    return tup_list
+
+#定义加上惩罚项的权重
+def resetWeight(array,sample_list,dataset_size):
+    #alpha权重的参数,dataset需要设置权重的数据集(训练集)
+    re_tup_list=[]
+    for i in range(0,dataset_size):        
+        data=array[i][0]
+        weight=array[i][1]
+        if data in sample_list:#i+1
+            weight+=1/dataset_size
+        tup1=(data,weight+1/dataset_size)    
+        re_tup_list.append(tup1)
+    return re_tup_list
+
+
+#带权重的抽样,输出的直接是序列号
+def weightRandomSample(arr,train_size):
+    #arr进行采样的数据及其对应的权重,vaild_size需要采样的数量(验证集的数量)
+    score={}
+
+    for (item,weight) in arr:
+        score[item]=random.random()**(1/weight)
+    values = score.values()
+
+    sample_data = [index for index, value in sorted(enumerate(values), reverse=True, key=operator.itemgetter(1))][:train_size]
+    non_sample_data=[index for index, value in sorted(enumerate(values), reverse=True, key=operator.itemgetter(1))][train_size:]
+    return sample_data,non_sample_data
+
+#不带权重的水库抽样
+def reservoirSamplingk(arr, train_size):
+    res0 = arr[:train_size]
+    res1 = []
+    i = train_size
+    while i < len(arr):
+        # 以k/i的概率选取第i个元素，用来等概率的替换之前选中的1个元素
+        r = random.randint(0, i)
+        if r < train_size:  # 小于k的概率就是k/i，替换res中第r个已选中的数
+            res0[r] = arr[i]
+            i += 1
+        set1 = set(arr)
+        set2 = set(res0)
+        res1=set1^set2
+        res1=list(res1)
+    return res0,res1
+
+#提取训练集
+def createTrainset(sample_result,X, y, time_steps):
+    x_values, y_values,sample_list = [], [],[]
+    for i in sample_result:
+        if (train_size-i) >time_steps:
+            x_values.append(X.iloc[i:(i + time_steps)].values)
+            y_values.append(y.iloc[i + time_steps])
+            sample_list.append(i)
+    return np.array(x_values), np.array(y_values),sample_list
+
+
+#提取验证集
+def createVaildset(non_sample_result,X, y, time_steps):
+    x_values, y_values,non_sample_list = [], [],[]
+    for i in non_sample_result :
+        if(train_size-i) >time_steps:
+            x_values.append(X.iloc[i:(i + time_steps)].values)
+            y_values.append(y.iloc[i + time_steps])
+            non_sample_list.append(i)
+    return np.array(x_values), np.array(y_values),non_sample_list
+
+
+#定义步长函数，抓取多组x和y
+def create_sequences(X, y, time_steps):
+    x_values, y_values = [], []
+    for i in range(len(X) - time_steps):
+        x_values.append(X.iloc[i:(i + time_steps)].values)
+        y_values.append(y.iloc[i + time_steps])
+    return np.array(x_values), np.array(y_values)
+
+
+#计算异常检测的性能指标
+def get_precision(lable, pre):
+    # ((lable == pre) & lable).sum() / (pre.sum() + 0.00001)
+    return sklearn.metrics.precision_score(lable, pre)
+
+#print(anomaly_df['label'].to_list())
+
+
+def get_recall(lable, pre):
+    # ((lable == pre) & lable).sum() / (lable.sum() + 0.00001)
+    return sklearn.metrics.recall_score(lable, pre)
+
+
+def get_f1score(lable, pre):
+    # ((lable == pre) & lable).sum() / (lable.sum() + 0.00001)
+    return sklearn.metrics.f1_score(lable, pre)
+
+
+def prediction(X_train_train,X_vaild,X_train_pred,X_vaild_pred,X_test_pred):
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+#模型对 训练集 预测，并得出预测后的损失mae loss，画图大概看一下
+    train_mae_loss = np.mean(np.abs(X_train_pred - X_train_train), axis=1)
+
+#模型对 验证集 预测，计算出预测后的损失mae loss，画图大概看一下
+    vaild_mae_loss = np.mean(np.abs(X_vaild_pred-X_vaild), axis=1)
+
+#模型对 测试集 预测，计算出预测后的损失mae loss，画图大概看一下
+    test_mae_loss = np.mean(np.abs(X_test_pred-X_test), axis=1)
+    return train_mae_loss,vaild_mae_loss,test_mae_loss
+
+def createAnomlies(threshold,sample_list,non_sample_list,train_mae_loss,vaild_mae_loss,test_mae_loss):
+    anomaly_df = pd.DataFrame()
+    anomaly_df['time'] =0
+    anomaly_df['loss'] =0
+    anomaly_df['reliability']=0
+    for i in range(0,len(sample_list)):
+    #anomaly_df.loc[sample_list[i],['time']]= sample_list[i]
+        anomaly_df.loc[sample_list[i],['time','loss']] = [sample_list[i],train_mae_loss[i]]
+    
+    for i in range(0,len(non_sample_list)):
+        anomaly_df.loc[non_sample_list[i],['time','loss']] = [non_sample_list[i],vaild_mae_loss[i]]       
+    
+    for i in range(0,test_size-TIME_STEPS):
+        anomaly_df.loc[len(sample_list)+len(non_sample_list)+i+1,['time','loss']] =[len(sample_list)+len(non_sample_list)+i+1,test_mae_loss[i]]  
+    
+    anomaly_df['threshold'] = threshold
+    anomaly_df['anomaly'] = anomaly_df['loss'] > anomaly_df['threshold']
+    anomaly_df['label'] =0
+    
+    for i in range(len(anomaly_df)):
+        if anomaly_df                                                                                                                                                                            ['time'].iloc[i]<=500:#or anomaly_df['time'].iloc[i]<=600
+            anomaly_df['label'].iloc[i] = False
+        else:
+            anomaly_df['label'].iloc[i] = True   
+    
+    anomaly_df['reliability']=0
+    y=[]
+    y_pre=[]
+    for i in (non_sample_list):
+        y.append(anomaly_df['label'].iloc[i-1])
+        y_pre.append(anomaly_df['anomaly'].iloc[i-1])#验证集
+    
+    Y=[]
+    Y_pre=[]
+    for i in range(0,test_size-TIME_STEPS):
+        Y.append(anomaly_df['label'].iloc[i+len(sample_list)+len(non_sample_list)])
+        Y_pre.append(anomaly_df['anomaly'].iloc[i+len(sample_list)+len(non_sample_list)])#测试集
+        y_precision=get_precision(y,y_pre)
+        y_recall=get_recall(y,y_pre)
+        y_f1score=get_f1score(y,y_pre)
+        Y_precision=get_precision(Y,Y_pre)
+        Y_recall=get_recall(Y,Y_pre)
+        Y_f1score=get_f1score(Y,Y_pre)
+    
+    #anomalies=anomaly_df.loc[anomaly_df['anomaly']==True]
+    anomalies=anomaly_df['loss']
+    return y,y_pre,Y,Y_pre, y_f1score,Y_f1score,anomalies,y_precision,Y_precision,y_recall,Y_recall
+
+###############################################################################
+
+
+arr0=setEqualWeight(sample_reliability,dataset_size)
+#arr0=[]
+#for i in range(0,dataset_size):
+#    arr0.append(i)
+sample_result0,non_sample_result0 = weightRandomSample(arr0,sample_size)
+
+
+#对训练集和测试集分别进行组的划分!!!需要修改的地方
+
+X_test, y_test = create_sequences(test[['reliability']], test['reliability'],TIME_STEPS)#test不变
+X_train_train0, y_train_train0,sample_list0 = createTrainset(sample_result0,train[['reliability']], train['reliability'],TIME_STEPS)
+X_vaild0, y_vaild0,non_sample_list0= createVaildset(non_sample_result0,train[['reliability']], train['reliability'],TIME_STEPS)
+print(X_test.shape)
+print(X_train_train0.shape[0], X_train_train0.shape[1])
+print(X_train_train0.shape[2])
+#print(sample_list0)
+#建立lstm autoencoder模型
+np.random.seed(1)
+tf.random.set_seed(1)
+
+#https://zhuanlan.zhihu.com/p/123810703MLP是最简单的DNN，它的每一层其实就是fc层（fully connected layer）
+input_layer = Input(shape=(X_train_train0.shape[1], X_train_train0.shape[2]))
+
+# 编码层
+encode_layer1 = Dense(150,activation='relu')(input_layer)
+#encode_layer2 = Dense(100,activation='relu')(encode_layer1)
+#encode_layer3 = Dense(50,activation='relu')(encode_layer2)
+
+# 低维表达层面
+#latent_view   = Dense(10, activation='sigmoid')(encode_layer3)
+latent_view   = Dense(64, activation='sigmoid')(encode_layer1)
+
+# 解码层
+
+#decode_layer1 = Dense(50,activation='relu')(latent_view)
+#decode_layer2 = Dense(100,activation='relu')(decode_layer1)
+#decode_layer3 = Dense(150,activation='relu')(decode_layer2)
+decode_layer3 = Dense(150,activation='relu')(latent_view)
+
+# 输出层
+output_layer1 = (TimeDistributed(Dense(X_train_train0.shape[2])))(decode_layer3)
+output_layer = Dense(X_train_train0.shape[2])(decode_layer3)
+
+
+model0 = Model(input_layer,output_layer)
+
+# 来看看模型的summary
+model0.summary()
+model0.compile(optimizer='adam', loss='mae')
+time_start=time.time()
+#训练模型
+history0 = model0.fit(X_train_train0, y_train_train0, epochs=200, batch_size=16, validation_split=0.2,
+                    callbacks=[keras.callbacks.EarlyStopping(monitor='val_loss', patience=3, mode='min')], shuffle=False)
+X_train_pred0 = model0.predict(X_train_train0, verbose=0)
+X_vaild_pred0 = model0.predict(X_vaild0, verbose=0)
+
+X_test_pred0 = model0.predict(X_test, verbose=0)
+time_end=time.time()
+print('totally cost',(time_end-time_start)/(test_size))
+
+
+
+#验证集,测试集的结果
+train_mae_loss0,vaild_mae_loss0,test_mae_loss0=prediction(X_train_train0,X_vaild0,X_train_pred0,X_vaild_pred0,X_test_pred0)
+                       
+print(train_mae_loss0)
+############################################
+threshold0 =np.max(train_mae_loss0)*threshold_percent
+
+
+ #计算异常检测的性能指标
+
+y0,y_pre0,Y0,Y_pre0,y_f1score0,Y_f1score0,anomalies0,y_precision0,Y_precision0,y_recall0,Y_recall0=createAnomlies(threshold0,sample_list0,non_sample_list0,train_mae_loss0,vaild_mae_loss0,test_mae_loss0)
+
+  
+print(Y_f1score0,Y_precision0,Y_recall0)
