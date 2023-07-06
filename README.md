@@ -4,6 +4,7 @@ A boosting Long Short-Term Memory (LSTM) Autoencoder for detecting MEC servicesâ
 ***Please refer to the following paper for a detailed description of the B-Detection approach:
 
 [1] Lei Wang, Shuhan Chen, Feifei Chen, Qiang He, and Jiyuan Liu, "B-Detection: Runtime Reliability Anomaly Detection for MEC Services with Boosting LSTM Autoencoder," IEEE Transactions on Mobile Computing, 2023. DOI: 10.1109/TMC.2023.3262233. (early access article)
+
 ***IF YOU ARE INSPIRED BY THIS SOURCE CODE IN PUBLISHED RESEARCH, PLEASE CITE THE ABOVE PAPER. THANKS!
 
 ***IF YOU ARE INSPIRED BY OUR TECHNIQUE FOR YOUR COMMERCIAL USED SYSTEMS, COULD PLEASE LET US KNOW? THANKS!
